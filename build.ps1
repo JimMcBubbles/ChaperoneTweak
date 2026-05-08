@@ -6,19 +6,18 @@ $SourceRoot  = "$PSScriptRoot\ChaperoneTweak\Assets"
 $OutputDll   = "$PSScriptRoot\Assembly-CSharp.dll"
 
 # csc.exe ships with .NET Framework on all Windows machines
-$Csc = "${env:SystemRoot}\Microsoft.NET\Framework64\v3.5\Smcs.exe"
+$Csc = "${env:SystemRoot}\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if (-not (Test-Path $Csc)) {
-    # Fall back to the Mono compiler bundled with the game itself
-    $Csc = "$InstallDir\..\Mono\bin\smcs.exe"
+    $Csc = "${env:SystemRoot}\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 }
 if (-not (Test-Path $Csc)) {
-    Write-Error "Could not find a C# compiler. Tried Framework64\v3.5\Smcs.exe and the game's Mono bin."
+    Write-Error "Could not find csc.exe. Please install .NET Framework 4."
     exit 1
 }
 
 # Collect all .cs files except those under Plugins (already in Assembly-CSharp-firstpass.dll)
 $Sources = Get-ChildItem -Path $SourceRoot -Recurse -Filter "*.cs" |
-    Where-Object { $_.FullName -notmatch '\\Plugins\\' } |
+    Where-Object { $_.FullName -notmatch '\\Plugins\\' -and $_.FullName -notmatch '\\Editor\\' } |
     ForEach-Object { "`"$($_.FullName)`"" }
 
 if (-not $Sources) {
@@ -37,10 +36,14 @@ $Refs = @(
     "System.Core.dll"
 ) | ForEach-Object { "-r:`"$InstallDir\$_`"" }
 
+$Refs += "-r:`"$InstallDir\mscorlib.dll`""
+
 $Args = @(
     "-target:library",
     "-out:`"$OutputDll`"",
-    "-nowarn:0169,0414,0649"   # suppress common Unity-generated field warnings
+    "-nostdlib",     # don't auto-reference .NET Framework mscorlib; use the game's Mono one
+    "-noconfig",     # don't load any default response files
+    "-nowarn:0169,0414,0649"
 ) + $Refs + $Sources
 
 & $Csc @Args
