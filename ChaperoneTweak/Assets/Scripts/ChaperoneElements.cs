@@ -118,22 +118,30 @@ public class ChaperoneElements : MonoBehaviour
         if (state != ChaperoneCalibrationState.OK)
         {
             Debug.Log("GetCalibrationState() = " + state.ToString());
+            ChaperoneLoading = false;
+            TweakAction = TweakActionType.none;
             return;
         }
         OpenVR.ChaperoneSetup.RevertWorkingCopy();
         if (!OpenVR.ChaperoneSetup.GetWorkingStandingZeroPoseToRawTrackingPose(ref mat))
         {
             Debug.Log("GetWorkingStandingZeroPoseToRawTrackingPose failed");
+            ChaperoneLoading = false;
+            TweakAction = TweakActionType.none;
             return;
         }
         if (!OpenVR.ChaperoneSetup.GetWorkingPlayAreaSize(ref x, ref y))
         {
             Debug.Log("GetWorkingPlayAreaSize() failed");
+            ChaperoneLoading = false;
+            TweakAction = TweakActionType.none;
             return;
         }
         if (!OpenVR.ChaperoneSetup.GetWorkingCollisionBoundsInfo(out quads))
         {
             Debug.Log("GetWorkingCollisionBoundsInfo() failed");
+            ChaperoneLoading = false;
+            TweakAction = TweakActionType.none;
             return;
         }
 
@@ -214,12 +222,6 @@ public class ChaperoneElements : MonoBehaviour
     {
         TweakAction = TweakActionType.save;
         ChaperoneSaving = true;
-        ChaperoneCalibrationState state = OpenVR.Chaperone.GetCalibrationState();
-        if (state != ChaperoneCalibrationState.OK)
-        {
-            Debug.Log("GetCalibrationState() = " + state.ToString());
-            return;
-        }
 
 
         SteamVR_Utils.RigidTransform rt = new SteamVR_Utils.RigidTransform();
@@ -469,7 +471,7 @@ public class ChaperoneElements : MonoBehaviour
             {
                 wallprops = wallprops.RightWall;
             }
-            if (FirstWall = wallprops) { FirstWall = wallprops.LeftWall; }
+            if (FirstWall == wallprops) { FirstWall = wallprops.LeftWall; }
             wallprops.LeftWall.RightWall = wallprops.RightWall;
             wallprops.RightWall.LeftWall = wallprops.LeftWall;
             Vector3 leftcorner = wallprops.LeftWall.transform.TransformPoint(new Vector3(-0.5f, 0f, 0f));
