@@ -3252,7 +3252,12 @@ public enum EVRApplicationType
 	VRApplication_Utility = 4,
 	VRApplication_VRMonitor = 5,
 	VRApplication_SteamWatchdog = 6,
-	VRApplication_Max = 7,
+	VRApplication_Bootstrapper = 7,
+	VRApplication_WebHelper = 8,
+	VRApplication_OpenXRInstance = 9,
+	VRApplication_OpenXRScene = 10,
+	VRApplication_OpenXROverlay = 11,
+	VRApplication_Max = 12,
 }
 public enum EVRFirmwareError
 {

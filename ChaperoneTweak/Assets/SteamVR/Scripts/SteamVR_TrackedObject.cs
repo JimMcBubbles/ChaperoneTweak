@@ -1,10 +1,12 @@
-﻿//======= Copyright (c) Valve Corporation, All rights reserved. ===============
+//======= Copyright (c) Valve Corporation, All rights reserved. ===============
 //
 // Purpose: For controlling in-game objects with tracked devices.
 //
 //=============================================================================
 
 using UnityEngine;
+using UnityEngine.XR;
+using System.Collections.Generic;
 using Valve.VR;
 
 public class SteamVR_TrackedObject : MonoBehaviour
@@ -74,12 +76,8 @@ public class SteamVR_TrackedObject : MonoBehaviour
 
 	void OnEnable()
 	{
-		var render = SteamVR_Render.instance;
-		if (render == null)
-		{
-			enabled = false;
-			return;
-		}
+		if (!SteamVR.active)
+			return; // no SteamVR — Update() will poll XR devices instead
 
 		SteamVR_Utils.Event.Listen("new_poses", OnNewPoses);
 	}
@@ -90,10 +88,66 @@ public class SteamVR_TrackedObject : MonoBehaviour
 		isValid = false;
 	}
 
+	float _logTimer;
+
+	void Update()
+	{
+		if (SteamVR.active) return; // SteamVR handles it via new_poses
+		if (index == EIndex.None) return;
+
+		bool log = (_logTimer -= Time.deltaTime) <= 0;
+		if (log) _logTimer = 3f;
+
+		InputDeviceCharacteristics chars;
+		XRNode node;
+		if (index == EIndex.Hmd)
+		{
+			chars = InputDeviceCharacteristics.HeadMounted;
+			node  = XRNode.Head;
+		}
+		else if (index == EIndex.Device1)
+		{
+			chars = InputDeviceCharacteristics.Right | InputDeviceCharacteristics.Controller;
+			node  = XRNode.RightHand;
+		}
+		else if (index == EIndex.Device2)
+		{
+			chars = InputDeviceCharacteristics.Left | InputDeviceCharacteristics.Controller;
+			node  = XRNode.LeftHand;
+		}
+		else return;
+
+		var devices = new List<InputDevice>();
+		InputDevices.GetDevicesWithCharacteristics(chars, devices);
+		if (devices.Count > 0)
+		{
+			var dev = devices[0];
+			if (dev.TryGetFeatureValue(CommonUsages.devicePosition, out Vector3 pos))
+				transform.localPosition = pos;
+			if (dev.TryGetFeatureValue(CommonUsages.deviceRotation, out Quaternion rot))
+				transform.localRotation = rot;
+			if (log) Debug.Log("[XRTrack] " + index + " pos=" + transform.localPosition);
+			return;
+		}
+
+		// Fallback: XRNodeState
+		var nodeStates = new List<XRNodeState>();
+		InputTracking.GetNodeStates(nodeStates);
+		foreach (var state in nodeStates)
+		{
+			if (state.nodeType != node) continue;
+			if (state.TryGetPosition(out Vector3 npos)) transform.localPosition = npos;
+			if (state.TryGetRotation(out Quaternion nrot)) transform.localRotation = nrot;
+			if (log) Debug.Log("[XRTrack] NodeState " + index + " pos=" + transform.localPosition);
+			return;
+		}
+
+		if (log) Debug.Log("[XRTrack] NO device for " + index);
+	}
+
 	public void SetDeviceIndex(int index)
 	{
 		if (System.Enum.IsDefined(typeof(EIndex), index))
 			this.index = (EIndex)index;
 	}
 }
-

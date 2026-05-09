@@ -1,16 +1,18 @@
-﻿using UnityEngine;
-using System.Collections;
+using UnityEngine;
+using UnityEngine.XR;
+using System.Collections.Generic;
 using Valve.VR;
 
-enum ChaperoneEditMode { wall, playSpace };
-//enum TweakActionType { wHeight, wCornerPosition, wAdd, wRemove, psEdge, psHeight, psCorner, psMove, save}
+public enum XRHand { Left, Right }
+enum ChaperoneEditMode { wall, playSpace }
 
 public class ControllerInput : MonoBehaviour
 {
+    // Set Left or Right in the Inspector for each controller GameObject.
+    public XRHand Hand = XRHand.Right;
+
     public GameObject HandCamera;
-
     public GameObject SelectionCircle;
-
     private bool IsEnabled = true;
 
     public Camera UICam;
@@ -24,116 +26,133 @@ public class ControllerInput : MonoBehaviour
     public GameObject origin;
     public LaserPointer Laser;
 
-    private SteamVR_TrackedObject trackedObj;
-    private SteamVR_Controller.Device controller { get { return SteamVR_Controller.Input((int)trackedObj.index); } }
-
     public GameObject testing;
 
-    private bool GripAction = false;
+    private bool GripAction   = false;
     private bool TriggerAction = false;
-    private bool MenuAction = false;
+    private bool MenuAction    = false;
 
-    public Material  PlaySpaceMatEdit, WallMatEdit, PlaySpaceMatTrans, WallMatTrans;
+    public Material PlaySpaceMatEdit, WallMatEdit, PlaySpaceMatTrans, WallMatTrans;
+
+    private InputDevice _device;
+    private bool _prevGrip, _prevTrigger, _prevMenu, _prevTouchpad;
 
     public void SetEnabled(bool isenabled)
     {
         IsEnabled = isenabled;
-            Laser.SetEnabled(isenabled);
+        Laser.SetEnabled(isenabled);
     }
 
     void Awake()
     {
-        trackedObj = GetComponent<SteamVR_TrackedObject>();
-        EditMode = ChaperoneEditMode.wall;
+        EditMode  = ChaperoneEditMode.wall;
         Laser.Mask = 1 << 8;
-        InUse = false;
+        InUse     = false;
     }
 
-    // Use this for initialization
-    void Start()
+    void Start() { }
+
+    private InputDevice FindDevice()
     {
-
+        var chars = InputDeviceCharacteristics.HeldInHand | InputDeviceCharacteristics.Controller
+            | (Hand == XRHand.Left ? InputDeviceCharacteristics.Left : InputDeviceCharacteristics.Right);
+        var found = new List<InputDevice>();
+        InputDevices.GetDevicesWithCharacteristics(chars, found);
+        return found.Count > 0 ? found[0] : default;
     }
 
-    // Update is called once per frame
     void Update()
     {
+        if (!_device.isValid)
+            _device = FindDevice();
+
+        if (!_device.isValid || !IsEnabled)
+        {
+            _prevGrip = _prevTrigger = _prevMenu = _prevTouchpad = false;
+            return;
+        }
+
+        _device.TryGetFeatureValue(CommonUsages.gripButton,        out bool grip);
+        _device.TryGetFeatureValue(CommonUsages.triggerButton,     out bool trigger);
+        _device.TryGetFeatureValue(CommonUsages.menuButton,        out bool menu);
+        _device.TryGetFeatureValue(CommonUsages.primary2DAxisClick, out bool touchpad);
+
+        bool gripDown    = grip    && !_prevGrip;
+        bool gripUp      = !grip   && _prevGrip;
+        bool triggerDown = trigger && !_prevTrigger;
+        bool triggerUp   = !trigger && _prevTrigger;
+        bool menuDown    = menu    && !_prevMenu;
+        bool menuUp      = !menu   && _prevMenu;
+        bool touchpadDown = touchpad && !_prevTouchpad;
+
         Collider[] collisions;
         Vector3 tempv1;
         TweakActionArea hitZone;
 
-        if ((controller == null) || (!IsEnabled))
-        {
-            return;
-        }
-
-        if (controller.GetPressDown(SteamVR_Controller.ButtonMask.Touchpad))
+        if (touchpadDown)
         {
             HandCamera.SetActive(!HandCamera.activeInHierarchy);
         }
 
-            if (!MenuAction && !TriggerAction && !GripAction)
+        if (!MenuAction && !TriggerAction && !GripAction)
         {
-
             if (Laser.Target != null)
             {
-                // Get the hit area
                 tempv1 = Laser.Target.transform.InverseTransformPoint(Laser.TargetPoint);
                 if (EditMode == ChaperoneEditMode.wall)
                 {
                     if (tempv1.y >= 0.75)
                     {
-                        if (tempv1.x <= -0.25) { hitZone = TweakActionArea.topLeft; }
-                        else if (tempv1.x >= 0.25) { hitZone = TweakActionArea.topRight; }
-                        else { hitZone = TweakActionArea.top; }
+                        if (tempv1.x <= -0.25)      { hitZone = TweakActionArea.topLeft; }
+                        else if (tempv1.x >= 0.25)  { hitZone = TweakActionArea.topRight; }
+                        else                         { hitZone = TweakActionArea.top; }
                     }
                     else if (tempv1.y <= 0.25)
                     {
-                        if (tempv1.x <= -0.25) { hitZone = TweakActionArea.bottomLeft; }
-                        else if (tempv1.x >= 0.25) { hitZone = TweakActionArea.bottomRight; }
-                        else { hitZone = TweakActionArea.bottom; }
+                        if (tempv1.x <= -0.25)      { hitZone = TweakActionArea.bottomLeft; }
+                        else if (tempv1.x >= 0.25)  { hitZone = TweakActionArea.bottomRight; }
+                        else                         { hitZone = TweakActionArea.bottom; }
                     }
                     else
                     {
-                        if (tempv1.x <= -0.25) { hitZone = TweakActionArea.left; }
-                        else if (tempv1.x >= 0.25) { hitZone = TweakActionArea.right; }
-                        else { hitZone = TweakActionArea.middle; }
+                        if (tempv1.x <= -0.25)      { hitZone = TweakActionArea.left; }
+                        else if (tempv1.x >= 0.25)  { hitZone = TweakActionArea.right; }
+                        else                         { hitZone = TweakActionArea.middle; }
                     }
                 }
                 else
                 {
                     if (tempv1.z >= 0.25)
                     {
-                        if (tempv1.x <= -0.25) { hitZone = TweakActionArea.topLeft; }
-                        else if (tempv1.x >= 0.25) { hitZone = TweakActionArea.topRight; }
-                        else { hitZone = TweakActionArea.top; }
+                        if (tempv1.x <= -0.25)      { hitZone = TweakActionArea.topLeft; }
+                        else if (tempv1.x >= 0.25)  { hitZone = TweakActionArea.topRight; }
+                        else                         { hitZone = TweakActionArea.top; }
                     }
                     else if (tempv1.z <= -0.25)
                     {
-                        if (tempv1.x <= -0.25) { hitZone = TweakActionArea.bottomLeft; }
-                        else if (tempv1.x >= 0.25) { hitZone = TweakActionArea.bottomRight; }
-                        else { hitZone = TweakActionArea.bottom; }
+                        if (tempv1.x <= -0.25)      { hitZone = TweakActionArea.bottomLeft; }
+                        else if (tempv1.x >= 0.25)  { hitZone = TweakActionArea.bottomRight; }
+                        else                         { hitZone = TweakActionArea.bottom; }
                     }
                     else
                     {
-                        if (tempv1.x <= -0.25) { hitZone = TweakActionArea.left; }
-                        else if (tempv1.x >= 0.25) { hitZone = TweakActionArea.right; }
-                        else { hitZone = TweakActionArea.middle; }
+                        if (tempv1.x <= -0.25)      { hitZone = TweakActionArea.left; }
+                        else if (tempv1.x >= 0.25)  { hitZone = TweakActionArea.right; }
+                        else                         { hitZone = TweakActionArea.middle; }
                     }
-                } // get the hit area
+                }
             }
             else
             {
                 hitZone = TweakActionArea.none;
             }
-            // grip down
-            if (controller.GetPressDown(SteamVR_Controller.ButtonMask.Grip))
+
+            if (gripDown)
             {
                 if (EditMode == ChaperoneEditMode.wall)
                 {
                     if ((hitZone == TweakActionArea.topLeft) || (hitZone == TweakActionArea.top) || (hitZone == TweakActionArea.topRight))
                     {
-                        // grip wall toprow
                         if (ChapElements.StartWallHeightAdjust(transform))
                         {
                             GripAction = true;
@@ -142,7 +161,6 @@ public class ControllerInput : MonoBehaviour
                     }
                     else if (hitZone != TweakActionArea.none)
                     {
-                        // grip wall toprow/midrow
                         if (ChapElements.StartWallEdgeAdjust(transform, Laser.Target, Laser.TargetPoint))
                         {
                             GripAction = true;
@@ -154,7 +172,6 @@ public class ControllerInput : MonoBehaviour
                 {
                     if ((hitZone == TweakActionArea.topLeft) || (hitZone == TweakActionArea.topRight) || (hitZone == TweakActionArea.bottomLeft) || (hitZone == TweakActionArea.bottomRight))
                     {
-                        // grip playspace corner
                         if (ChapElements.StartPlaySpaceCornerPivot(transform, hitZone))
                         {
                             GripAction = true;
@@ -163,7 +180,6 @@ public class ControllerInput : MonoBehaviour
                     }
                     else if ((hitZone == TweakActionArea.top) || (hitZone == TweakActionArea.left) || (hitZone == TweakActionArea.bottom) || (hitZone == TweakActionArea.right))
                     {
-                        // grip playspace edge
                         if (ChapElements.StartPlaySpaceEdgeResize(transform, hitZone))
                         {
                             GripAction = true;
@@ -172,7 +188,6 @@ public class ControllerInput : MonoBehaviour
                     }
                     else if (hitZone == TweakActionArea.middle)
                     {
-                        // grip playspace middle
                         if (ChapElements.StartPlaySpaceMove(transform))
                         {
                             GripAction = true;
@@ -181,14 +196,12 @@ public class ControllerInput : MonoBehaviour
                     }
                 }
             }
-            else if (controller.GetPressDown(SteamVR_Controller.ButtonMask.Trigger))
+            else if (triggerDown)
             {
-                // trigger pressed
                 if (EditMode == ChaperoneEditMode.wall)
                 {
                     if ((hitZone == TweakActionArea.top) || (hitZone == TweakActionArea.middle) || (hitZone == TweakActionArea.bottom))
                     {
-                        // trigger wall midcolumn
                         if (ChapElements.SplitWallSegment(transform, Laser.Target, Laser.TargetPoint))
                         {
                             TriggerAction = true;
@@ -197,7 +210,6 @@ public class ControllerInput : MonoBehaviour
                     }
                     else if (hitZone != TweakActionArea.none)
                     {
-                        // trigger wall leftcolumn/rightcolumn
                         if (ChapElements.DeleteWallSegment(Laser.Target, Laser.TargetPoint))
                         {
                             TriggerAction = true;
@@ -209,7 +221,6 @@ public class ControllerInput : MonoBehaviour
                 {
                     if (hitZone == TweakActionArea.middle)
                     {
-                        // trigger playspace middle
                         if (ChapElements.StartPlaySpaceHeightAdjust(transform))
                         {
                             TriggerAction = true;
@@ -234,9 +245,8 @@ public class ControllerInput : MonoBehaviour
                     }
                 }
             }
-            else if (controller.GetPressDown(SteamVR_Controller.ButtonMask.ApplicationMenu))
+            else if (menuDown)
             {
-                // menu pressed
                 OtherControllerInput.SetEnabled(false);
                 Laser.SetEnabled(false);
                 UICam.enabled = true;
@@ -247,7 +257,7 @@ public class ControllerInput : MonoBehaviour
             }
         }
 
-        if (controller.GetPressUp(SteamVR_Controller.ButtonMask.ApplicationMenu))
+        if (menuUp)
         {
             if (MenuAction)
             {
@@ -280,8 +290,6 @@ public class ControllerInput : MonoBehaviour
                     }
                 }
 
-
-
                 OtherControllerInput.SetEnabled(true);
                 Laser.SetEnabled(true);
                 UICam.enabled = false;
@@ -290,9 +298,8 @@ public class ControllerInput : MonoBehaviour
             }
         }
 
-        if (controller.GetPressUp(SteamVR_Controller.ButtonMask.Grip))
+        if (gripUp)
         {
-            // grip released
             if (GripAction)
             {
                 ChapElements.EndAction();
@@ -301,9 +308,8 @@ public class ControllerInput : MonoBehaviour
             }
         }
 
-        if (controller.GetPressUp(SteamVR_Controller.ButtonMask.Trigger))
+        if (triggerUp)
         {
-            // trigger released
             if (TriggerAction)
             {
                 ChapElements.EndAction();
@@ -312,14 +318,13 @@ public class ControllerInput : MonoBehaviour
             }
         }
 
-        //////////////////////////////////////////////
         if (MenuAction)
         {
             collisions = Physics.OverlapSphere(transform.TransformPoint(0, -0.034f, 0.015f), 0.1f, 1 << 5);
             if (collisions.Length > 0)
             {
-                SelectionCircle.transform.parent = collisions[0].transform;
-                SelectionCircle.transform.localScale = Vector3.one;
+                SelectionCircle.transform.parent        = collisions[0].transform;
+                SelectionCircle.transform.localScale    = Vector3.one;
                 SelectionCircle.transform.localRotation = Quaternion.identity;
                 SelectionCircle.transform.localPosition = Vector3.zero;
                 SelectionCircle.SetActive(true);
@@ -329,5 +334,10 @@ public class ControllerInput : MonoBehaviour
                 SelectionCircle.SetActive(false);
             }
         }
+
+        _prevGrip     = grip;
+        _prevTrigger  = trigger;
+        _prevMenu     = menu;
+        _prevTouchpad = touchpad;
     }
 }

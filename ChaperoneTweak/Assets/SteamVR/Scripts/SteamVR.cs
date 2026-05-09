@@ -5,6 +5,7 @@
 //=============================================================================
 
 using UnityEngine;
+using UnityEngine.XR;
 using Valve.VR;
 
 public class SteamVR : System.IDisposable
@@ -17,12 +18,7 @@ public class SteamVR : System.IDisposable
 	private static bool _enabled = true;
 	public static bool enabled
 	{
-		get
-		{
-			if (!UnityEngine.VR.VRSettings.enabled)
-				enabled = false;
-			return _enabled;
-		}
+		get { return _enabled; }
 		set
 		{
 			_enabled = value;
@@ -58,43 +54,14 @@ public class SteamVR : System.IDisposable
 
 	public static bool usingNativeSupport
 	{
-		get { return UnityEngine.VR.VRDevice.GetNativePtr() != System.IntPtr.Zero; }
+		get { return OpenVR.System != null; }
 	}
 
 	static SteamVR CreateInstance()
 	{
-		try
-		{
-			var error = EVRInitError.None;
-			if (!SteamVR.usingNativeSupport)
-			{
-				Debug.Log("OpenVR initialization failed.  Ensure 'Virtual Reality Supported' is checked in Player Settings, and OpenVR is added to the list of Virtual Reality SDKs.");
-				return null;
-			}
-
-			// Verify common interfaces are valid.
-
-			OpenVR.GetGenericInterface(OpenVR.IVRCompositor_Version, ref error);
-			if (error != EVRInitError.None)
-			{
-				ReportError(error);
-				return null;
-			}
-
-			OpenVR.GetGenericInterface(OpenVR.IVROverlay_Version, ref error);
-			if (error != EVRInitError.None)
-			{
-				ReportError(error);
-				return null;
-			}
-		}
-		catch (System.Exception e)
-		{
-			Debug.LogError(e);
-			return null;
-		}
-
-		return new SteamVR();
+		// OpenVR.Init conflicts with the OpenXR session — chaperone data is
+		// read/written directly via ChaperoneFileIO instead.
+		return null;
 	}
 
 	static void ReportError(EVRInitError error)

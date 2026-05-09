@@ -98,41 +98,8 @@ public class SteamVR_Settings : EditorWindow
 			//window.title = "SteamVR";
 		}
 
-		// Switch to native OpenVR support.
-		var updated = false;
-
-		if (!PlayerSettings.virtualRealitySupported)
-		{
-			PlayerSettings.virtualRealitySupported = true;
-			updated = true;
-		}
-
-		var devices = UnityEditorInternal.VR.VREditor.GetVREnabledDevices(BuildTargetGroup.Standalone);
-		var hasOpenVR = false;
-		foreach (var device in devices)
-			if (device.ToLower() == "openvr")
-				hasOpenVR = true;
-
-		if (!hasOpenVR)
-		{
-			string[] newDevices;
-			if (updated)
-			{
-				newDevices = new string[] { "OpenVR" };
-			}
-			else
-			{
-				newDevices = new string[devices.Length + 1];
-				for (int i = 0; i < devices.Length; i++)
-					newDevices[i] = devices[i];
-				newDevices[devices.Length] = "OpenVR";
-				updated = true;
-			}
-			UnityEditorInternal.VR.VREditor.SetVREnabledDevices(BuildTargetGroup.Standalone, newDevices);
-		}
-
-		if (updated)
-			Debug.Log("Switching to native OpenVR support.");
+		// Note: legacy VREditor.SetVREnabledDevices API was removed in Unity 2020.
+		// XR device configuration is now handled via XR Plugin Management in Project Settings.
 
 		var dlls = new string[]
 		{

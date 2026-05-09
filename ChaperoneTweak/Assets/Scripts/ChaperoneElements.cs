@@ -1,5 +1,4 @@
 ﻿using UnityEngine;
-using System.Collections;
 using Valve.VR;
 
 public enum TweakActionType { wHeight, wEdgePosition, wAdd, wRemove, psEdgeResize, psSetFront, psHeight, psPivotScale, psPivot, psMove, save, reload, menu, none }
@@ -10,6 +9,11 @@ public class ChaperoneElements : MonoBehaviour
 
     // Don't shrink wall height or playscale width/length below this size
     public float MinimumScale = 0.10f;
+
+    // Snap wall corners to 90° when within this distance (metres) of the perfect position
+    public float CornerSnapDistance = 0.15f;
+    // Snap play space rotation to 90° increments when within this many degrees
+    public float RotationSnapDegrees = 15f;
 
     // used for the assorted Tweak functions
     private TweakActionArea TweakArea;
@@ -113,33 +117,8 @@ public class ChaperoneElements : MonoBehaviour
         ChaperonePlaneProperties wall, prevwall;
         ChaperoneLoading = true;
 
-        //make sure we can get all the necessary information
-        ChaperoneCalibrationState state = OpenVR.Chaperone.GetCalibrationState();
-        if (state != ChaperoneCalibrationState.OK)
+        if (!ChaperoneFileIO.Load(out mat, out x, out y, out quads))
         {
-            Debug.Log("GetCalibrationState() = " + state.ToString());
-            ChaperoneLoading = false;
-            TweakAction = TweakActionType.none;
-            return;
-        }
-        OpenVR.ChaperoneSetup.RevertWorkingCopy();
-        if (!OpenVR.ChaperoneSetup.GetWorkingStandingZeroPoseToRawTrackingPose(ref mat))
-        {
-            Debug.Log("GetWorkingStandingZeroPoseToRawTrackingPose failed");
-            ChaperoneLoading = false;
-            TweakAction = TweakActionType.none;
-            return;
-        }
-        if (!OpenVR.ChaperoneSetup.GetWorkingPlayAreaSize(ref x, ref y))
-        {
-            Debug.Log("GetWorkingPlayAreaSize() failed");
-            ChaperoneLoading = false;
-            TweakAction = TweakActionType.none;
-            return;
-        }
-        if (!OpenVR.ChaperoneSetup.GetWorkingCollisionBoundsInfo(out quads))
-        {
-            Debug.Log("GetWorkingCollisionBoundsInfo() failed");
             ChaperoneLoading = false;
             TweakAction = TweakActionType.none;
             return;
@@ -223,15 +202,10 @@ public class ChaperoneElements : MonoBehaviour
         TweakAction = TweakActionType.save;
         ChaperoneSaving = true;
 
-
         SteamVR_Utils.RigidTransform rt = new SteamVR_Utils.RigidTransform();
         rt.pos = PlaySpace.transform.position;
         rt.rot = PlaySpace.transform.rotation;
-
         HmdMatrix34_t mat = rt.ToHmdMatrix34();
-        OpenVR.ChaperoneSetup.SetWorkingStandingZeroPoseToRawTrackingPose(ref mat);
-
-        OpenVR.ChaperoneSetup.SetWorkingPlayAreaSize(PlaySpace.transform.localScale.x, PlaySpace.transform.localScale.z);
 
         HmdQuad_t[] pQuadsBuffer = new HmdQuad_t[WallCount];
         ChaperonePlaneProperties wall = FirstWall;
@@ -259,8 +233,8 @@ public class ChaperoneElements : MonoBehaviour
 
             wall = wall.LeftWall;
         }
-        OpenVR.ChaperoneSetup.SetWorkingCollisionBoundsInfo(pQuadsBuffer);
-        OpenVR.ChaperoneSetup.CommitWorkingCopy(EChaperoneConfigFile.Live);//
+
+        ChaperoneFileIO.Save(mat, PlaySpace.transform.localScale.x, PlaySpace.transform.localScale.z, pQuadsBuffer);
         ReloadChaperone();
         ChaperoneSaving = false;
     }
@@ -268,7 +242,27 @@ public class ChaperoneElements : MonoBehaviour
     // Use this for initialization
     void Start()
     {
+        SetupControllerTracking();
         ReloadChaperone();
+    }
+
+    void SetupControllerTracking()
+    {
+        // The scene's prefab instance had SteamVR_TrackedObject removed from
+        // Controller (left) and Controller (right). Re-add it here so OpenXR
+        // can drive the controller transforms.
+        AddControllerTracker("Controller (right)", SteamVR_TrackedObject.EIndex.Device1);
+        AddControllerTracker("Controller (left)",  SteamVR_TrackedObject.EIndex.Device2);
+    }
+
+    void AddControllerTracker(string objectName, SteamVR_TrackedObject.EIndex deviceIndex)
+    {
+        var go = GameObject.Find(objectName);
+        if (go == null) { Debug.Log("[XRCtrl] " + objectName + " not found"); return; }
+        if (go.GetComponent<SteamVR_TrackedObject>() != null) return;
+        var tracker = go.AddComponent<SteamVR_TrackedObject>();
+        tracker.index = deviceIndex;
+        Debug.Log("[XRCtrl] added tracker to " + objectName + " index=" + deviceIndex);
     }
 
     public bool StartPlaySpaceMove(Transform controller)
@@ -509,6 +503,12 @@ public class ChaperoneElements : MonoBehaviour
         return true;
     }
 
+    private float SnapTo90(float angle)
+    {
+        float snapped = Mathf.Round(angle / 90f) * 90f;
+        return (Mathf.Abs(Mathf.DeltaAngle(angle, snapped)) < RotationSnapDegrees) ? snapped : angle;
+    }
+
     public void EndAction()
     {
         TweakAction = TweakActionType.none;
@@ -552,12 +552,30 @@ public class ChaperoneElements : MonoBehaviour
         {
             voffset = TweakControllerTrans.position - TweakControllerInitPos;
             voffset.y = 0;
-            TweakLeftWall.transform.position = Vector3.Lerp(TweakLeftPivotPoint, TweakTargetInitPoint + voffset, 0.5f);
-            TweakLeftWall.transform.localScale = new Vector3(Vector3.Distance(TweakLeftPivotPoint, TweakTargetInitPoint + voffset), TweakLeftWall.transform.localScale.y, 1);
-            TweakLeftWall.transform.rotation = Quaternion.LookRotation(TweakLeftPivotPoint - (TweakTargetInitPoint + voffset), Vector3.up) * Quaternion.Euler(0, 90, 0);
-            TweakRightWall.transform.position = Vector3.Lerp(TweakRightPivotPoint, TweakTargetInitPoint + voffset, 0.5f);
-            TweakRightWall.transform.localScale = new Vector3(Vector3.Distance(TweakRightPivotPoint, TweakTargetInitPoint + voffset), TweakRightWall.transform.localScale.y, 1);
-            TweakRightWall.transform.rotation = Quaternion.LookRotation(TweakTargetInitPoint + voffset - TweakRightPivotPoint, Vector3.up) * Quaternion.Euler(0, 90, 0);
+            Vector3 cornerPos = TweakTargetInitPoint + voffset;
+
+            // Snap corner to 90° using Thales' theorem:
+            // all points where two walls meet at 90° lie on the circle whose diameter
+            // connects the two far wall endpoints (TweakLeftPivotPoint, TweakRightPivotPoint).
+            Vector3 leftH  = new Vector3(TweakLeftPivotPoint.x,  0, TweakLeftPivotPoint.z);
+            Vector3 rightH = new Vector3(TweakRightPivotPoint.x, 0, TweakRightPivotPoint.z);
+            Vector3 midH   = (leftH + rightH) * 0.5f;
+            float   radius = Vector3.Distance(leftH, rightH) * 0.5f;
+            Vector3 toCorner = new Vector3(cornerPos.x, 0, cornerPos.z) - midH;
+            if (radius > 0.05f && toCorner.magnitude > 0.01f &&
+                Mathf.Abs(toCorner.magnitude - radius) < CornerSnapDistance)
+            {
+                Vector3 snappedH = midH + toCorner.normalized * radius;
+                cornerPos.x = snappedH.x;
+                cornerPos.z = snappedH.z;
+            }
+
+            TweakLeftWall.transform.position  = Vector3.Lerp(TweakLeftPivotPoint, cornerPos, 0.5f);
+            TweakLeftWall.transform.localScale = new Vector3(Vector3.Distance(TweakLeftPivotPoint, cornerPos), TweakLeftWall.transform.localScale.y, 1);
+            TweakLeftWall.transform.rotation   = Quaternion.LookRotation(TweakLeftPivotPoint - cornerPos, Vector3.up) * Quaternion.Euler(0, 90, 0);
+            TweakRightWall.transform.position  = Vector3.Lerp(TweakRightPivotPoint, cornerPos, 0.5f);
+            TweakRightWall.transform.localScale = new Vector3(Vector3.Distance(TweakRightPivotPoint, cornerPos), TweakRightWall.transform.localScale.y, 1);
+            TweakRightWall.transform.rotation  = Quaternion.LookRotation(cornerPos - TweakRightPivotPoint, Vector3.up) * Quaternion.Euler(0, 90, 0);
         }
 
         //adjust playspace horizontal position
@@ -639,7 +657,7 @@ public class ChaperoneElements : MonoBehaviour
             {
                 newcornerpos = TweakPivotPoint + Vector3.Normalize(newcornerpos - TweakPivotPoint) * TweakMinScale;
             }
-            PlaySpace.transform.localEulerAngles = new Vector3(PlaySpace.transform.localEulerAngles.x, TweakYawDelta + Quaternion.LookRotation(newcornerpos - TweakPivotPoint, Vector3.up).eulerAngles.y, PlaySpace.transform.localEulerAngles.z);
+            PlaySpace.transform.localEulerAngles = new Vector3(PlaySpace.transform.localEulerAngles.x, SnapTo90(TweakYawDelta + Quaternion.LookRotation(newcornerpos - TweakPivotPoint, Vector3.up).eulerAngles.y), PlaySpace.transform.localEulerAngles.z);
             PlaySpace.transform.position = Vector3.Lerp(newcornerpos, TweakPivotPoint, 0.5f);
             temp.x = Mathf.Sqrt(Mathf.Pow(Vector3.Magnitude(newcornerpos - TweakPivotPoint), 2) / (Mathf.Pow(TweakInitScaleV.z / TweakInitScaleV.x, 2) + 1));
             temp.y = 1;
@@ -651,7 +669,7 @@ public class ChaperoneElements : MonoBehaviour
         {
             voffset = TweakControllerTrans.position - TweakControllerInitPos;
             voffset.y = 0;
-            PlaySpace.transform.localEulerAngles = new Vector3(PlaySpace.transform.localEulerAngles.x, TweakYawDelta + Quaternion.LookRotation(TweakTargetInitPoint + voffset - TweakPivotPoint, Vector3.up).eulerAngles.y, PlaySpace.transform.localEulerAngles.z);
+            PlaySpace.transform.localEulerAngles = new Vector3(PlaySpace.transform.localEulerAngles.x, SnapTo90(TweakYawDelta + Quaternion.LookRotation(TweakTargetInitPoint + voffset - TweakPivotPoint, Vector3.up).eulerAngles.y), PlaySpace.transform.localEulerAngles.z);
         }
 
     }

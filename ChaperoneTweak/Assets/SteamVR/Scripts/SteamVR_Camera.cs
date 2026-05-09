@@ -5,6 +5,7 @@
 //=============================================================================
 
 using UnityEngine;
+using UnityEngine.XR;
 using System.Collections;
 using System.Reflection;
 using Valve.VR;
@@ -31,8 +32,8 @@ public class SteamVR_Camera : MonoBehaviour
 
 	static public float sceneResolutionScale
 	{
-		get { return UnityEngine.VR.VRSettings.renderScale; }
-		set { UnityEngine.VR.VRSettings.renderScale = value; }
+		get { return XRSettings.eyeTextureResolutionScale; }
+		set { XRSettings.eyeTextureResolutionScale = value; }
 	}
 
 	#region Enable / Disable
@@ -48,11 +49,13 @@ public class SteamVR_Camera : MonoBehaviour
 		var vr = SteamVR.instance;
 		if (vr == null)
 		{
+			// Disable the orthographic head camera — XR rejects orthographic on the main view
 			if (head != null)
 			{
-				head.GetComponent<SteamVR_TrackedObject>().enabled = false;
+				var headCam = head.GetComponent<Camera>();
+				if (headCam != null) headCam.enabled = false;
 			}
-
+			// SteamVR_TrackedObject stays enabled — it falls back to XR InputDevices
 			enabled = false;
 			return;
 		}
@@ -202,13 +205,6 @@ public class SteamVR_Camera : MonoBehaviour
 			while (transform.childCount > 0)
 				transform.GetChild(0).parent = head;
 
-			var guiLayer = GetComponent<GUILayer>();
-			if (guiLayer != null)
-			{
-				DestroyImmediate(guiLayer);
-				head.gameObject.AddComponent<GUILayer>();
-			}
-
 			var audioListener = GetComponent<AudioListener>();
 			if (audioListener != null)
 			{
@@ -232,13 +228,6 @@ public class SteamVR_Camera : MonoBehaviour
 		// Move children and components from head back to camera.
 		while (head.childCount > 0)
 			head.GetChild(0).parent = transform;
-
-		var guiLayer = head.GetComponent<GUILayer>();
-		if (guiLayer != null)
-		{
-			DestroyImmediate(guiLayer);
-			gameObject.AddComponent<GUILayer>();
-		}
 
 		if (ears != null)
 		{

@@ -1,5 +1,9 @@
 # Build script for ChaperoneTweak
 # Compiles Assembly-CSharp.dll from source and deploys it to the Steam installation.
+#
+# Unity 6 splits UnityEngine into many UnityEngine.*.dll modules.
+# This script globs all of them so new modules (e.g. UnityEngine.XRModule.dll) are
+# picked up automatically without editing the reference list.
 
 $InstallDir = "C:\Program Files (x86)\Steam\steamapps\common\ChaperoneTweak\ChaperoneTweak_Data\Managed"
 $SourceRoot  = "$PSScriptRoot\ChaperoneTweak\Assets"
@@ -27,15 +31,13 @@ if (-not $Sources) {
 
 Write-Host "Compiling $($Sources.Count) source files..."
 
-# References: DLLs already present in the Steam installation
-$Refs = @(
-    "UnityEngine.dll",
-    "UnityEngine.UI.dll",
-    "Assembly-CSharp-firstpass.dll",
-    "System.dll",
-    "System.Core.dll"
-) | ForEach-Object { "-r:`"$InstallDir\$_`"" }
+# Reference all UnityEngine module DLLs (handles both Unity 5.x monolithic and Unity 6 modular layouts)
+$Refs = Get-ChildItem -Path $InstallDir -Filter "UnityEngine*.dll" |
+    ForEach-Object { "-r:`"$($_.FullName)`"" }
 
+$Refs += "-r:`"$InstallDir\Assembly-CSharp-firstpass.dll`""
+$Refs += "-r:`"$InstallDir\System.dll`""
+$Refs += "-r:`"$InstallDir\System.Core.dll`""
 $Refs += "-r:`"$InstallDir\mscorlib.dll`""
 
 $Args = @(
