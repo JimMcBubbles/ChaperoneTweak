@@ -53,12 +53,12 @@ public class ChaperoneElements : MonoBehaviour
     public Transform Head;
 
     [Header("Controller Model Calibration")]
-    public float CtrlOffsetX =   0f;
-    public float CtrlOffsetY = -0.108f;
-    public float CtrlOffsetZ =   0f;
-    public float CtrlRotX    = -93.782f;
-    public float CtrlRotY    =   0f;
-    public float CtrlRotZ    =   0f;
+    public float CtrlOffsetX =  0.0f;
+    public float CtrlOffsetY = -0.015f;
+    public float CtrlOffsetZ =  0.13f;
+    public float CtrlRotX    = -77.0f;
+    public float CtrlRotY    = -5.0f;
+    public float CtrlRotZ    =  5.0f;
 
     static string CalibPath => Path.Combine(Application.dataPath, "..", "controllerCalib.json");
     float _calibLastCheck;
