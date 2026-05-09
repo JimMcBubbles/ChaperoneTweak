@@ -10,7 +10,7 @@ public class CtrlCalibMenu : MonoBehaviour
     public bool IsOpen => _root != null && _root.activeSelf;
 
     static readonly string[] Labels = { "Rot X", "Rot Y", "Rot Z", "Pos X", "Pos Y", "Pos Z" };
-    static readonly float[]  Steps  = { 1f,      1f,      1f,      0.005f,  0.005f,  0.005f  };
+    static readonly float[]  Steps  = { 0.1f,    0.1f,    0.1f,    0.001f,  0.001f,  0.001f  };
 
     ChaperoneElements _chap;
     GameObject _root;
