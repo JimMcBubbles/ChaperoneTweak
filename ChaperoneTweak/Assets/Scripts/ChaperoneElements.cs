@@ -1,5 +1,8 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.XR;
 using Valve.VR;
@@ -37,7 +40,10 @@ public class ChaperoneElements : MonoBehaviour
     private bool ChaperoneLoading = false;
     private bool ChaperoneSaving = false;
     private Coroutine _boundsCheckCoroutine;
+    private Coroutine _floorFixCoroutine;
     private GameObject _outOfBoundsMessage;
+    private GameObject _leftCtrl, _rightCtrl;
+    private InputDevice _leftXRDevice, _rightXRDevice;
     private ChaperonePlaneProperties PlaySpace = null;
     private ChaperonePlaneProperties FirstWall = null;
     private int WallCount = 0;
@@ -45,6 +51,96 @@ public class ChaperoneElements : MonoBehaviour
     public TweakActionType CurrentAction { get { return TweakAction; } }
     public Material WallMaterial, PlaySpaceMaterial;
     public Transform Head;
+
+    [Header("Controller Model Calibration")]
+    public float CtrlOffsetX =   0f;
+    public float CtrlOffsetY = -0.108f;
+    public float CtrlOffsetZ =   0f;
+    public float CtrlRotX    = -93.782f;
+    public float CtrlRotY    =   0f;
+    public float CtrlRotZ    =   0f;
+
+    static string CalibPath => Path.Combine(Application.dataPath, "..", "controllerCalib.json");
+    float _calibLastCheck;
+    System.DateTime _calibLastWrite;
+
+    public void StartFloorFix(Transform floorController)
+    {
+        if (_floorFixCoroutine != null) StopCoroutine(_floorFixCoroutine);
+        _floorFixCoroutine = StartCoroutine(FloorFixCoroutine(floorController));
+    }
+
+    IEnumerator FloorFixCoroutine(Transform floorController)
+    {
+        Debug.Log("[Floor] Waiting for controller to settle...");
+        const float settleThreshold = 0.005f; // 5 mm
+        const float settleRequiredTime = 0.5f; // still for 0.5 s
+
+        float stillTime = 0f;
+        Vector3 lastPos = floorController.position;
+        while (stillTime < settleRequiredTime)
+        {
+            yield return null;
+            float moved = Vector3.Distance(floorController.position, lastPos);
+            stillTime = (moved < settleThreshold) ? stillTime + Time.deltaTime : 0f;
+            lastPos = floorController.position;
+        }
+
+        Debug.Log("[Floor] Controller settled, applying fix.");
+        FixFloor(floorController);
+        _floorFixCoroutine = null;
+    }
+
+    void FixFloor(Transform controller)
+    {
+        if (PlaySpace == null) return;
+
+        float floorY = GetControllerFloorY(controller);
+        Debug.Log("[Floor] FixFloor: floorY=" + floorY + " currentRigY=" + transform.position.y);
+
+        // Move only the rig's Y so the play space floor aligns with the physical floor.
+        // PlaySpace.localPosition.y = 0 so rig.position.y == play space world Y.
+        transform.position = new Vector3(transform.position.x, floorY, transform.position.z);
+        SaveChaperone();
+    }
+
+    float GetControllerFloorY(Transform ctrl)
+    {
+        // Prefer renderer bounds: world-space AABB min Y accounts for position and rotation.
+        // Exclude the LaserPointer renderer (thin line, misleadingly low).
+        var renderers = ctrl.GetComponentsInChildren<Renderer>();
+        if (renderers.Length > 0)
+        {
+            Bounds? b = null;
+            foreach (var r in renderers)
+            {
+                if (r.GetComponent<LineRenderer>() != null) continue;
+                b = b.HasValue ? b.Value : r.bounds;
+                b = new Bounds(b.Value.center, b.Value.size);
+                b.Value.Encapsulate(r.bounds);
+            }
+            if (b.HasValue)
+            {
+                Debug.Log("[Floor] renderer bounds min.y=" + b.Value.min.y);
+                return b.Value.min.y;
+            }
+        }
+
+        // Fallback: transform the 8 corners of a Valve Index controller bounding box
+        // (in controller-local space) to world space and return the minimum Y.
+        // Origin is at the grip. Ring: ±60 mm XZ, +10 to +80 mm Y.  Handle: -130 mm Y.
+        float minY = float.MaxValue;
+        Vector3[] localCorners = {
+            new Vector3(-0.06f, -0.13f, -0.04f), new Vector3( 0.06f, -0.13f, -0.04f),
+            new Vector3(-0.06f,  0.08f, -0.04f), new Vector3( 0.06f,  0.08f, -0.04f),
+            new Vector3(-0.06f, -0.13f,  0.04f), new Vector3( 0.06f, -0.13f,  0.04f),
+            new Vector3(-0.06f,  0.08f,  0.04f), new Vector3( 0.06f,  0.08f,  0.04f),
+        };
+        foreach (var c in localCorners)
+            minY = Mathf.Min(minY, ctrl.TransformPoint(c).y);
+        Debug.Log("[Floor] bbox min.y=" + minY + " ctrl.pos.y=" + ctrl.position.y);
+        return minY;
+    }
 
     public void SetMaterials(Material wallmat, Material playspacemat)
     {
@@ -245,9 +341,140 @@ public class ChaperoneElements : MonoBehaviour
         ChaperoneSaving = false;
     }
 
+    void OnEnable()
+    {
+        ControllerModelFeature.OnModelsLoaded += OnControllerModelsLoaded;
+        UnityEngine.XR.InputDevices.deviceConnected += OnXRDeviceConnected;
+        StartCoroutine(ApplyControllerModelsWhenReady());
+    }
+
+    IEnumerator ApplyControllerModelsWhenReady()
+    {
+        // deviceConnected only fires for new connections. Controllers already paired at launch
+        // won't fire the event. GetDevicesWithCharacteristics also returns nothing in OnEnable
+        // because XR device registration happens after script enable. Wait until at least one
+        // controller appears, then enumerate all of them.
+        var devs = new List<InputDevice>();
+        yield return new WaitUntil(() => {
+            devs.Clear();
+            InputDevices.GetDevicesWithCharacteristics(
+                InputDeviceCharacteristics.Controller | InputDeviceCharacteristics.HeldInHand, devs);
+            return devs.Count > 0;
+        });
+        foreach (var dev in devs)
+            OnXRDeviceConnected(dev);
+    }
+
+    void OnDisable()
+    {
+        ControllerModelFeature.OnModelsLoaded -= OnControllerModelsLoaded;
+        UnityEngine.XR.InputDevices.deviceConnected -= OnXRDeviceConnected;
+    }
+
+    void OnXRDeviceConnected(UnityEngine.XR.InputDevice device)
+    {
+        bool isController = device.characteristics.HasFlag(UnityEngine.XR.InputDeviceCharacteristics.Controller)
+                         && device.characteristics.HasFlag(UnityEngine.XR.InputDeviceCharacteristics.HeldInHand);
+        if (!isController) return;
+
+        bool isLeft = device.characteristics.HasFlag(UnityEngine.XR.InputDeviceCharacteristics.Left);
+        Debug.Log("[CtrlLib] Device connected: " + device.name + " isLeft=" + isLeft);
+
+        if (isLeft) _leftXRDevice  = device;
+        else        _rightXRDevice = device;
+
+        var meshes = ControllerModelLibrary.GetMeshes(device.name, isLeft);
+        if (meshes != null)
+            ApplyModelToController(isLeft ? _leftCtrl : _rightCtrl, meshes);
+    }
+
+    void OnControllerModelsLoaded()
+    {
+        ApplyModelToController(_leftCtrl,  ControllerModelFeature.LeftMeshes);
+        ApplyModelToController(_rightCtrl, ControllerModelFeature.RightMeshes);
+    }
+
+    void ApplyModelToController(GameObject ctrl, Mesh[] meshes)
+    {
+        if (ctrl == null || meshes == null || meshes.Length == 0) return;
+
+        // Remove whatever placeholder visual was added at startup.
+        var existing = ctrl.transform.Find("ControllerVisual");
+        if (existing != null) Destroy(existing.gameObject);
+
+        var mat     = new Material(Shader.Find("Standard"));
+        mat.color   = new Color(0.2f, 0.2f, 0.2f);
+        var root    = new GameObject("ControllerVisual");
+        root.transform.SetParent(ctrl.transform, false);
+        root.transform.localRotation = Quaternion.Euler(CtrlRotX, CtrlRotY, CtrlRotZ);
+        root.transform.localPosition = new Vector3(CtrlOffsetX, CtrlOffsetY, CtrlOffsetZ);
+
+        foreach (var mesh in meshes)
+        {
+            var go = new GameObject(mesh.name);
+            go.transform.SetParent(root.transform, false);
+            go.AddComponent<MeshFilter>().mesh       = mesh;
+            go.AddComponent<MeshRenderer>().material = mat;
+        }
+        Debug.Log("[CtrlModel] Applied " + meshes.Length + " meshes to " + ctrl.name);
+    }
+
+    void LoadCalib()
+    {
+        if (!File.Exists(CalibPath)) { SaveCalib(); return; }
+        try
+        {
+            var j = JObject.Parse(File.ReadAllText(CalibPath));
+            CtrlOffsetX = j["CtrlOffsetX"]?.Value<float>() ?? CtrlOffsetX;
+            CtrlOffsetY = j["CtrlOffsetY"]?.Value<float>() ?? CtrlOffsetY;
+            CtrlOffsetZ = j["CtrlOffsetZ"]?.Value<float>() ?? CtrlOffsetZ;
+            CtrlRotX    = j["CtrlRotX"]?.Value<float>()    ?? CtrlRotX;
+            CtrlRotY    = j["CtrlRotY"]?.Value<float>()    ?? CtrlRotY;
+            CtrlRotZ    = j["CtrlRotZ"]?.Value<float>()    ?? CtrlRotZ;
+            _calibLastWrite = File.GetLastWriteTime(CalibPath);
+            Debug.Log("[Calib] Loaded: RotX=" + CtrlRotX + " Y=" + CtrlOffsetY);
+        }
+        catch (System.Exception e) { Debug.LogWarning("[Calib] Load failed: " + e.Message); }
+    }
+
+    void SaveCalib()
+    {
+        try
+        {
+            var j = new JObject();
+            j["CtrlOffsetX"] = CtrlOffsetX;
+            j["CtrlOffsetY"] = CtrlOffsetY;
+            j["CtrlOffsetZ"] = CtrlOffsetZ;
+            j["CtrlRotX"]    = CtrlRotX;
+            j["CtrlRotY"]    = CtrlRotY;
+            j["CtrlRotZ"]    = CtrlRotZ;
+            File.WriteAllText(CalibPath, j.ToString());
+            _calibLastWrite = File.GetLastWriteTime(CalibPath);
+        }
+        catch (System.Exception e) { Debug.LogWarning("[Calib] Save failed: " + e.Message); }
+    }
+
+    public void SaveCalibPublic() => SaveCalib();
+
+    static readonly float[] _calibSteps = { 1f, 1f, 1f, 0.005f, 0.005f, 0.005f };
+
+    public void AdjustCalib(int field, float delta)
+    {
+        switch (field)
+        {
+            case 0: CtrlRotX    += delta; break;
+            case 1: CtrlRotY    += delta; break;
+            case 2: CtrlRotZ    += delta; break;
+            case 3: CtrlOffsetX += delta; break;
+            case 4: CtrlOffsetY += delta; break;
+            case 5: CtrlOffsetZ += delta; break;
+        }
+    }
+
     // Use this for initialization
     void Start()
     {
+        LoadCalib();
         SetupControllerTracking();
         ReloadChaperone();
         StartBoundsCheck();
@@ -269,11 +496,14 @@ public class ChaperoneElements : MonoBehaviour
     IEnumerator OutOfBoundsCheck()
     {
         yield return new WaitUntil(() => UnityEngine.Rendering.SplashScreen.isFinished);
-        // Don't check bounds until the HMD is actually reporting valid tracking data.
+        // Don't check bounds until the HMD is valid AND the Head transform has received
+        // tracking data. Head.localPosition stays (0,0,0) for a frame even when isValid,
+        // causing a false OOB trigger when the play space centre isn't at world origin.
         yield return new WaitUntil(() => {
             var devs = new List<InputDevice>();
             InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.HeadMounted, devs);
-            return devs.Count > 0 && devs[0].isValid;
+            return devs.Count > 0 && devs[0].isValid
+                && Head != null && Head.localPosition.sqrMagnitude > 0.0001f;
         });
 
         Debug.Log("[OOB] Initial bounds check: inside=" + IsHmdInsidePlaySpace()
@@ -440,7 +670,110 @@ public class ChaperoneElements : MonoBehaviour
         if (go.GetComponent<SteamVR_TrackedObject>() != null) return;
         var tracker = go.AddComponent<SteamVR_TrackedObject>();
         tracker.index = deviceIndex;
+        bool isLeft = deviceIndex == SteamVR_TrackedObject.EIndex.Device2;
+        if (isLeft) _leftCtrl  = go;
+        else        _rightCtrl = go;
+        BuildControllerVisual(go, isLeft);
         Debug.Log("[XRCtrl] tracking " + go.name + " as " + deviceIndex);
+    }
+
+    void BuildControllerVisual(GameObject root, bool isLeft)
+    {
+        // Priority 1: bundled prefab in Resources/  (import FBX there and name it accordingly)
+        string resName = isLeft ? "IndexControllerLeft" : "IndexControllerRight";
+        var prefab = Resources.Load<GameObject>(resName);
+        if (prefab != null)
+        {
+            var vis = Instantiate(prefab);
+            vis.name = "ControllerVisual";
+            vis.transform.SetParent(root.transform, false);
+            // Remove colliders from the visual — we don't want physics hits on the model.
+            foreach (var col in vis.GetComponentsInChildren<Collider>())
+                Destroy(col);
+            Debug.Log("[XRCtrl] Loaded bundled " + resName);
+            return;
+        }
+
+        // Priority 2: SteamVR glove GLB on disk (device-matched model applied later via OnXRDeviceConnected)
+        string rmDir     = FindSteamVRRenderModelsPath();
+        string gloveName = isLeft ? "vr_glove_left_model_slim.glb" : "vr_glove_right_model_slim.glb";
+        string glovePath = Path.Combine(rmDir, "vr_glove", gloveName);
+
+        var meshes = GlbMeshLoader.Load(glovePath);
+        if (meshes != null && meshes.Length > 0)
+        {
+            var mat = new Material(Shader.Find("Standard"));
+            mat.color = new Color(0.55f, 0.55f, 0.55f);
+
+            var meshRoot = new GameObject("ControllerVisual");
+            meshRoot.transform.SetParent(root.transform, false);
+
+            for (int i = 0; i < meshes.Length; i++)
+            {
+                var go = new GameObject("GloveMesh_" + i);
+                go.transform.SetParent(meshRoot.transform, false);
+                go.AddComponent<MeshFilter>().mesh         = meshes[i];
+                go.AddComponent<MeshRenderer>().material   = mat;
+            }
+            Debug.Log("[XRCtrl] Loaded " + gloveName + " (" + meshes.Length + " meshes)");
+            return;
+        }
+
+        Debug.LogWarning("[XRCtrl] Could not load " + glovePath + " — falling back to primitives");
+        BuildIndexControllerProxy(root);
+    }
+
+    string FindSteamVRRenderModelsPath()
+    {
+        // openvrpaths.vrpath is the authoritative file SteamVR writes with the runtime location.
+        try
+        {
+            string vrpath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "openvr", "openvrpaths.vrpath");
+            if (File.Exists(vrpath))
+            {
+                var json    = JObject.Parse(File.ReadAllText(vrpath));
+                var runtime = (json["runtime"] as JArray)?[0]?.Value<string>();
+                if (!string.IsNullOrEmpty(runtime))
+                {
+                    string path = Path.Combine(runtime, "resources", "rendermodels");
+                    if (Directory.Exists(path)) return path;
+                }
+            }
+        }
+        catch { }
+        return @"C:\Program Files (x86)\Steam\steamapps\common\SteamVR\resources\rendermodels";
+    }
+
+    void BuildIndexControllerProxy(GameObject root)
+    {
+        var mat = new Material(Shader.Find("Standard"));
+        mat.color = new Color(0.2f, 0.2f, 0.2f);
+
+        var ring = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        ring.name = "Ring";
+        ring.transform.SetParent(root.transform, false);
+        ring.transform.localPosition = new Vector3(0f, 0.04f, 0f);
+        ring.transform.localScale    = new Vector3(0.12f, 0.025f, 0.12f);
+        ring.GetComponent<Renderer>().material = mat;
+        Destroy(ring.GetComponent<Collider>());
+
+        var handle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        handle.name = "Handle";
+        handle.transform.SetParent(root.transform, false);
+        handle.transform.localPosition = new Vector3(0f, -0.055f, 0f);
+        handle.transform.localScale    = new Vector3(0.035f, 0.065f, 0.035f);
+        handle.GetComponent<Renderer>().material = mat;
+        Destroy(handle.GetComponent<Collider>());
+
+        var body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        body.name = "Body";
+        body.transform.SetParent(root.transform, false);
+        body.transform.localPosition = new Vector3(0f, 0.075f, -0.015f);
+        body.transform.localScale    = new Vector3(0.08f, 0.05f, 0.07f);
+        body.GetComponent<Renderer>().material = mat;
+        Destroy(body.GetComponent<Collider>());
     }
 
     public bool StartPlaySpaceMove(Transform controller)
@@ -692,9 +1025,30 @@ public class ChaperoneElements : MonoBehaviour
         TweakAction = TweakActionType.none;
     }
 
+    void UpdateControllerVisual(GameObject ctrl, InputDevice _)
+    {
+        if (ctrl == null) return;
+        var vis = ctrl.transform.Find("ControllerVisual");
+        if (vis == null) return;
+        vis.localPosition = new Vector3(CtrlOffsetX, CtrlOffsetY, CtrlOffsetZ);
+        vis.localRotation = Quaternion.Euler(CtrlRotX, CtrlRotY, CtrlRotZ);
+    }
+
     // Update is called once per frame
     void Update()
     {
+        UpdateControllerVisual(_leftCtrl,  _leftXRDevice);
+        UpdateControllerVisual(_rightCtrl, _rightXRDevice);
+
+        // Hot-reload controllerCalib.json when it changes on disk (check every second).
+        _calibLastCheck += Time.deltaTime;
+        if (_calibLastCheck >= 1f)
+        {
+            _calibLastCheck = 0f;
+            if (File.Exists(CalibPath) && File.GetLastWriteTime(CalibPath) != _calibLastWrite)
+                LoadCalib();
+        }
+
         //Local variables
         float foffset;
         Vector3 voffset;

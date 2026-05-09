@@ -28,9 +28,11 @@ public class ControllerInput : MonoBehaviour
 
     public GameObject testing;
 
-    private bool GripAction   = false;
+    private bool GripAction    = false;
     private bool TriggerAction = false;
     private bool MenuAction    = false;
+    private bool CalibAction   = false;
+    private int  _savedLaserMask;
 
     public Material PlaySpaceMatEdit, WallMatEdit, PlaySpaceMatTrans, WallMatTrans;
 
@@ -50,7 +52,43 @@ public class ControllerInput : MonoBehaviour
         InUse     = false;
     }
 
-    void Start() { }
+    void Start()
+    {
+        if (Menu == null) return;
+
+        var existing = Menu.transform.Find("Calibrate");
+        if (existing != null)
+        {
+            // Sphere already exists (e.g. saved to scene) — make sure it's on the right layer.
+            existing.gameObject.layer = 5;
+            Debug.Log("[ChaperoneTweak] Calibrate sphere found, ensured layer=5");
+            return;
+        }
+
+        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        go.name = "Calibrate";
+        go.layer = 5;
+        go.transform.SetParent(Menu.transform, false);
+        go.transform.localPosition = new Vector3(0.3f, 0, 0);
+        go.transform.localScale    = Vector3.one * 0.15f;
+
+        var label = new GameObject("Label");
+        label.transform.SetParent(go.transform, false);
+        label.transform.localPosition = new Vector3(0, 1.2f, 0);
+        label.transform.localRotation = Quaternion.Euler(0, 180, 0);
+        label.transform.localScale    = new Vector3(-10, 10, 10);
+        var tm = label.AddComponent<TextMesh>();
+        tm.text          = "Calibrate";
+        tm.characterSize = 0.06f;
+        tm.fontSize      = 50;
+        tm.anchor        = TextAnchor.MiddleCenter;
+        tm.alignment     = TextAlignment.Center;
+        tm.color         = Color.cyan;
+
+        var icon = go.AddComponent<MenuIcon>();
+        icon.Camera = Head;
+        Debug.Log("[ChaperoneTweak] Calibrate sphere created on layer 5");
+    }
 
     private InputDevice FindDevice()
     {
@@ -93,7 +131,32 @@ public class ControllerInput : MonoBehaviour
 
         if (touchpadDown)
         {
-            HandCamera.SetActive(!HandCamera.activeInHierarchy);
+            ChapElements.StartFloorFix(OtherControllerInput.transform);
+        }
+
+        // Calib menu: laser points at layer-10 buttons; trigger clicks them.
+        if (CalibAction)
+        {
+            // Auto-exit if the menu was destroyed or closed externally.
+            if (CtrlCalibMenu.Instance == null || !CtrlCalibMenu.Instance.IsOpen)
+            {
+                EndCalibAction();
+                // Fall through to normal input handling this frame.
+            }
+            else
+            {
+                if (triggerDown && Laser.Target != null)
+                {
+                    var btn = Laser.Target.GetComponent<CalibButton>();
+                    if (btn != null) btn.Press();
+                }
+                // A button also closes the calib menu.
+                if (menuDown) EndCalibAction();
+
+                _prevGrip = grip; _prevTrigger = trigger; _prevMenu = menu; _prevTouchpad = touchpad;
+                _prevPrimary = primary; _prevSecondary = secondary;
+                return;
+            }
         }
 
         if (!MenuAction && !TriggerAction && !GripAction)
@@ -264,6 +327,7 @@ public class ControllerInput : MonoBehaviour
             if (MenuAction)
             {
                 collisions = Physics.OverlapSphere(transform.TransformPoint(0, -0.034f, 0.015f), 0.1f, 1 << 5);
+                Debug.Log($"[ChaperoneTweak] menuUp hits: {collisions.Length}" + (collisions.Length > 0 ? " first=" + collisions[0].name + " layer=" + collisions[0].gameObject.layer : ""));
                 if (collisions.Length > 0)
                 {
                     if (collisions[0].name == "Walls")
@@ -289,6 +353,30 @@ public class ControllerInput : MonoBehaviour
                     else if (collisions[0].name == "Save")
                     {
                         ChapElements.SaveChaperone();
+                    }
+                    else if (collisions[0].name == "Calibrate")
+                    {
+                        Debug.Log("[ChaperoneTweak] Calibrate selected");
+                        var cm = CtrlCalibMenu.GetOrCreate(ChapElements);
+                        // Use ChapElements.Head (same object as OOB message) for reliable placement.
+                        Transform h = ChapElements.Head != null ? ChapElements.Head : Head;
+                        cm.Toggle(h);
+                        // Do menu cleanup here and return so we don't re-enable OtherController.
+                        SelectionCircle.SetActive(false);
+                        UICam.enabled = false;
+                        MenuAction = false;
+                        Menu.SetActive(false);
+                        if (cm.IsOpen)
+                        {
+                            Laser.SetEnabled(true);
+                            BeginCalibAction();
+                        }
+                        else
+                        {
+                            OtherControllerInput.SetEnabled(true);
+                            Laser.SetEnabled(true);
+                        }
+                        return;
                     }
                 }
 
@@ -337,11 +425,28 @@ public class ControllerInput : MonoBehaviour
             }
         }
 
-        _prevGrip     = grip;
-        _prevTrigger  = trigger;
-        _prevMenu     = menu;
-        _prevTouchpad = touchpad;
+        _prevGrip      = grip;
+        _prevTrigger   = trigger;
+        _prevMenu      = menu;
+        _prevTouchpad  = touchpad;
         _prevPrimary   = primary;
         _prevSecondary = secondary;
     }
+
+    void BeginCalibAction()
+    {
+        CalibAction = true;
+        _savedLaserMask = Laser.Mask;
+        Laser.Mask = 1 << 10;   // only hit calib buttons
+        OtherControllerInput.SetEnabled(false);
+    }
+
+    void EndCalibAction()
+    {
+        CalibAction = false;
+        Laser.Mask = _savedLaserMask;
+        OtherControllerInput.SetEnabled(true);
+        CtrlCalibMenu.Instance?.Close();
+    }
 }
+
