@@ -1052,6 +1052,7 @@ MonoBehaviour:
   RotationSnapDegrees: 15
   WallMaterial: {fileID: 2100000, guid: 30c81c1c5a12516429b2a56cfdc0d589, type: 2}
   PlaySpaceMaterial: {fileID: 2100000, guid: dc5253632429d8e4aa060a565f804761, type: 2}
+  Head: {fileID: 923847899}
 --- !u!43 &1694978471
 Mesh:
   m_ObjectHideFlags: 0

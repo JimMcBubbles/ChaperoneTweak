@@ -35,7 +35,7 @@ public class ControllerInput : MonoBehaviour
     public Material PlaySpaceMatEdit, WallMatEdit, PlaySpaceMatTrans, WallMatTrans;
 
     private InputDevice _device;
-    private bool _prevGrip, _prevTrigger, _prevMenu, _prevTouchpad;
+    private bool _prevGrip, _prevTrigger, _prevMenu, _prevTouchpad, _prevPrimary, _prevSecondary;
 
     public void SetEnabled(bool isenabled)
     {
@@ -72,10 +72,12 @@ public class ControllerInput : MonoBehaviour
             return;
         }
 
-        _device.TryGetFeatureValue(CommonUsages.gripButton,        out bool grip);
-        _device.TryGetFeatureValue(CommonUsages.triggerButton,     out bool trigger);
-        _device.TryGetFeatureValue(CommonUsages.menuButton,        out bool menu);
+        _device.TryGetFeatureValue(CommonUsages.triggerButton,      out bool trigger);
+        _device.TryGetFeatureValue(CommonUsages.secondaryButton,   out bool grip);    // B button = drag/move
+        _device.TryGetFeatureValue(CommonUsages.primaryButton,     out bool menu);    // A button = menu
         _device.TryGetFeatureValue(CommonUsages.primary2DAxisClick, out bool touchpad);
+        bool primary = grip;   // A = drag/move
+        bool secondary = menu; // B = menu
 
         bool gripDown    = grip    && !_prevGrip;
         bool gripUp      = !grip   && _prevGrip;
@@ -339,5 +341,7 @@ public class ControllerInput : MonoBehaviour
         _prevTrigger  = trigger;
         _prevMenu     = menu;
         _prevTouchpad = touchpad;
+        _prevPrimary   = primary;
+        _prevSecondary = secondary;
     }
 }

@@ -1,4 +1,7 @@
-﻿using UnityEngine;
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.XR;
 using Valve.VR;
 
 public enum TweakActionType { wHeight, wEdgePosition, wAdd, wRemove, psEdgeResize, psSetFront, psHeight, psPivotScale, psPivot, psMove, save, reload, menu, none }
@@ -33,12 +36,15 @@ public class ChaperoneElements : MonoBehaviour
 
     private bool ChaperoneLoading = false;
     private bool ChaperoneSaving = false;
+    private Coroutine _boundsCheckCoroutine;
+    private GameObject _outOfBoundsMessage;
     private ChaperonePlaneProperties PlaySpace = null;
     private ChaperonePlaneProperties FirstWall = null;
     private int WallCount = 0;
 
     public TweakActionType CurrentAction { get { return TweakAction; } }
     public Material WallMaterial, PlaySpaceMaterial;
+    public Transform Head;
 
     public void SetMaterials(Material wallmat, Material playspacemat)
     {
@@ -244,25 +250,197 @@ public class ChaperoneElements : MonoBehaviour
     {
         SetupControllerTracking();
         ReloadChaperone();
+        StartBoundsCheck();
+    }
+
+    void StartBoundsCheck()
+    {
+        if (_boundsCheckCoroutine != null) StopCoroutine(_boundsCheckCoroutine);
+        _boundsCheckCoroutine = StartCoroutine(OutOfBoundsCheck());
+    }
+
+    bool IsHmdInsidePlaySpace()
+    {
+        if (PlaySpace == null || Head == null) return true;
+        Vector3 local = PlaySpace.transform.InverseTransformPoint(Head.position);
+        return Mathf.Abs(local.x) <= 0.5f && Mathf.Abs(local.z) <= 0.5f;
+    }
+
+    IEnumerator OutOfBoundsCheck()
+    {
+        yield return new WaitUntil(() => UnityEngine.Rendering.SplashScreen.isFinished);
+        // Don't check bounds until the HMD is actually reporting valid tracking data.
+        yield return new WaitUntil(() => {
+            var devs = new List<InputDevice>();
+            InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.HeadMounted, devs);
+            return devs.Count > 0 && devs[0].isValid;
+        });
+
+        Debug.Log("[OOB] Initial bounds check: inside=" + IsHmdInsidePlaySpace()
+            + " Head.pos=" + Head.position + " Head.localPos=" + Head.localPosition
+            + " rig.pos=" + transform.position + " rig.rot=" + transform.rotation.eulerAngles
+            + " PS.pos=" + PlaySpace.transform.position);
+        if (IsHmdInsidePlaySpace()) yield break;
+
+        ShowOutOfBoundsMessage(10);
+        float timer = 10f;
+        float logTimer = 0f;
+        Vector3 lastGoodLocalPos = Head.localPosition;
+        while (timer > 0f)
+        {
+            if (IsHmdInsidePlaySpace())
+            {
+                Debug.Log("[OOB] Player returned inside, cancelling recenter");
+                HideOutOfBoundsMessage();
+                yield break;
+            }
+            if (Head.localPosition != Vector3.zero)
+                lastGoodLocalPos = Head.localPosition;
+            UpdateOutOfBoundsMessage(Mathf.CeilToInt(timer));
+            logTimer -= Time.deltaTime;
+            if (logTimer <= 0f)
+            {
+                Debug.Log("[OOB] countdown=" + Mathf.CeilToInt(timer)
+                    + " Head.pos=" + Head.position + " Head.localPos=" + Head.localPosition
+                    + " lastGood=" + lastGoodLocalPos + " rig.pos=" + transform.position);
+                logTimer = 2f;
+            }
+            yield return null;
+            timer -= Time.deltaTime;
+        }
+
+        Debug.Log("[OOB] Timer expired, recentering. lastGoodLocalPos=" + lastGoodLocalPos);
+        HideOutOfBoundsMessage();
+        RecenterOnPlayer(lastGoodLocalPos);
+    }
+
+    void ShowOutOfBoundsMessage(int seconds)
+    {
+        if (_outOfBoundsMessage != null) return;
+        _outOfBoundsMessage = new GameObject("OutOfBoundsMsg");
+        _outOfBoundsMessage.transform.SetParent(Head, false);
+        _outOfBoundsMessage.transform.localPosition = new Vector3(0, 0, 0.5f);
+        // Rotate 180° so the TextMesh face (-Z) points back toward the camera (+Z).
+        // Euler(0,180,0) makes the face visible but mirrors X. Negative X scale cancels the mirror.
+        _outOfBoundsMessage.transform.localRotation = Quaternion.Euler(0, 180, 0);
+        _outOfBoundsMessage.transform.localScale = new Vector3(-1, 1, 1);
+        var tm = _outOfBoundsMessage.AddComponent<TextMesh>();
+        tm.text = "Outside play space\nRecentering in " + seconds + "s";
+        tm.characterSize = 0.04f;
+        tm.fontSize = 40;
+        tm.anchor = TextAnchor.MiddleCenter;
+        tm.alignment = TextAlignment.Center;
+        tm.color = Color.red;
+    }
+
+    void UpdateOutOfBoundsMessage(int seconds)
+    {
+        if (_outOfBoundsMessage == null) return;
+        var tm = _outOfBoundsMessage.GetComponent<TextMesh>();
+        if (tm != null) tm.text = "Outside play space\nRecentering in " + seconds + "s";
+    }
+
+    void HideOutOfBoundsMessage()
+    {
+        if (_outOfBoundsMessage != null)
+        {
+            Destroy(_outOfBoundsMessage);
+            _outOfBoundsMessage = null;
+        }
+    }
+
+    void RecenterOnPlayer(Vector3 cachedHmdLocalPos)
+    {
+        if (Head == null || PlaySpace == null || FirstWall == null)
+        {
+            Debug.Log("[OOB] RecenterOnPlayer: missing reference (Head=" + Head + " PlaySpace=" + PlaySpace + " FirstWall=" + FirstWall + ")");
+            return;
+        }
+
+        // Also sample XR device position for diagnostics
+        var devs = new List<InputDevice>();
+        InputDevices.GetDevicesWithCharacteristics(InputDeviceCharacteristics.HeadMounted, devs);
+        Vector3 xrDevicePos = Vector3.zero;
+        if (devs.Count > 0) devs[0].TryGetFeatureValue(CommonUsages.devicePosition, out xrDevicePos);
+        Vector3 rigInverseHead = transform.InverseTransformPoint(Head.position);
+
+        Debug.Log("[OOB] RecenterOnPlayer:"
+            + " Head.localPos=" + Head.localPosition
+            + " Head.worldPos=" + Head.position
+            + " rigInverseHead=" + rigInverseHead
+            + " xrDevicePos=" + xrDevicePos
+            + " cachedHmdLocalPos=" + cachedHmdLocalPos
+            + " rig.pos=" + transform.position
+            + " rig.rot=" + transform.rotation.eulerAngles);
+
+        // Use cachedHmdLocalPos (last frame where Head.localPosition was non-zero during countdown).
+        // Fall back to rigInverseHead if cache is still zero.
+        Vector3 bestLocalPos = (cachedHmdLocalPos != Vector3.zero) ? cachedHmdLocalPos
+                             : (rigInverseHead != Vector3.zero) ? rigInverseHead
+                             : xrDevicePos;
+
+        Vector3 localOffset = new Vector3(bestLocalPos.x, 0f, bestLocalPos.z);
+        Debug.Log("[OOB] RecenterOnPlayer: bestLocalPos=" + bestLocalPos + " shifting by " + localOffset);
+
+        PlaySpace.transform.localPosition += localOffset;
+
+        ChaperonePlaneProperties wall = FirstWall;
+        for (int i = 0; i < WallCount; i++)
+        {
+            wall.transform.localPosition += localOffset;
+            wall = wall.LeftWall;
+        }
+
+        // Write to the chaperone file directly so SteamVR's overlay updates.
+        // Do NOT call SaveChaperone() — it ends with ReloadChaperone() which re-anchors the rig
+        // at the new mat position, adding the device offset a second time.
+        SteamVR_Utils.RigidTransform rt = new SteamVR_Utils.RigidTransform();
+        rt.pos = PlaySpace.transform.position;
+        rt.rot = PlaySpace.transform.rotation;
+        HmdMatrix34_t mat = rt.ToHmdMatrix34();
+
+        HmdQuad_t[] pQuadsBuffer = new HmdQuad_t[WallCount];
+        wall = FirstWall;
+        for (int index = 0; index < WallCount; index++)
+        {
+            Vector3 wc = Vector3.Scale(PlaySpace.transform.InverseTransformPoint(wall.transform.TransformPoint(new Vector3(0.5f, 0f, 0f))), PlaySpace.transform.localScale);
+            pQuadsBuffer[index].vCorners0.v0 = wc.x; pQuadsBuffer[index].vCorners0.v1 = wc.y; pQuadsBuffer[index].vCorners0.v2 = -wc.z;
+            wc = Vector3.Scale(PlaySpace.transform.InverseTransformPoint(wall.transform.TransformPoint(new Vector3(0.5f, 1f, 0f))), PlaySpace.transform.localScale);
+            pQuadsBuffer[index].vCorners1.v0 = wc.x; pQuadsBuffer[index].vCorners1.v1 = wc.y; pQuadsBuffer[index].vCorners1.v2 = -wc.z;
+            wc = Vector3.Scale(PlaySpace.transform.InverseTransformPoint(wall.transform.TransformPoint(new Vector3(-0.5f, 1f, 0f))), PlaySpace.transform.localScale);
+            pQuadsBuffer[index].vCorners2.v0 = wc.x; pQuadsBuffer[index].vCorners2.v1 = wc.y; pQuadsBuffer[index].vCorners2.v2 = -wc.z;
+            wc = Vector3.Scale(PlaySpace.transform.InverseTransformPoint(wall.transform.TransformPoint(new Vector3(-0.5f, 0f, 0f))), PlaySpace.transform.localScale);
+            pQuadsBuffer[index].vCorners3.v0 = wc.x; pQuadsBuffer[index].vCorners3.v1 = wc.y; pQuadsBuffer[index].vCorners3.v2 = -wc.z;
+            wall = wall.LeftWall;
+        }
+
+        bool saved = ChaperoneFileIO.Save(mat, PlaySpace.transform.localScale.x, PlaySpace.transform.localScale.z, pQuadsBuffer);
+        Debug.Log("[OOB] RecenterOnPlayer: file save result=" + saved + " PlaySpace.worldPos=" + PlaySpace.transform.position);
     }
 
     void SetupControllerTracking()
     {
-        // The scene's prefab instance had SteamVR_TrackedObject removed from
-        // Controller (left) and Controller (right). Re-add it here so OpenXR
-        // can drive the controller transforms.
-        AddControllerTracker("Controller (right)", SteamVR_TrackedObject.EIndex.Device1);
-        AddControllerTracker("Controller (left)",  SteamVR_TrackedObject.EIndex.Device2);
+        // SteamVR_ControllerManager.OnEnable() deactivates both controllers and waits
+        // for SteamVR device-connected events that never fire when SteamVR is disabled.
+        // Grab the controller references from it, activate them manually, then disable
+        // the manager so it can't deactivate them again.
+        var mgr = GetComponent<SteamVR_ControllerManager>();
+        if (mgr == null) { Debug.Log("[XRCtrl] no SteamVR_ControllerManager found"); return; }
+
+        mgr.enabled = false;
+
+        AddControllerTracker(mgr.right, SteamVR_TrackedObject.EIndex.Device1);
+        AddControllerTracker(mgr.left,  SteamVR_TrackedObject.EIndex.Device2);
     }
 
-    void AddControllerTracker(string objectName, SteamVR_TrackedObject.EIndex deviceIndex)
+    void AddControllerTracker(GameObject go, SteamVR_TrackedObject.EIndex deviceIndex)
     {
-        var go = GameObject.Find(objectName);
-        if (go == null) { Debug.Log("[XRCtrl] " + objectName + " not found"); return; }
+        if (go == null) { Debug.Log("[XRCtrl] controller GO is null for " + deviceIndex); return; }
+        go.SetActive(true);
         if (go.GetComponent<SteamVR_TrackedObject>() != null) return;
         var tracker = go.AddComponent<SteamVR_TrackedObject>();
         tracker.index = deviceIndex;
-        Debug.Log("[XRCtrl] added tracker to " + objectName + " index=" + deviceIndex);
+        Debug.Log("[XRCtrl] tracking " + go.name + " as " + deviceIndex);
     }
 
     public bool StartPlaySpaceMove(Transform controller)
